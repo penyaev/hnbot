@@ -3,10 +3,10 @@
  * excluding anything already delivered to the same feed within the window.
  *
  * Dedup state lives server-side in the `deliveries` table, keyed by feed name.
- * The cursor is an opaque handle to a feed: calling once/day with the returned
- * cursor walks down the week's best stories with no repeats. Re-ranking the
- * current window on every call means a fresh high-scoring story still surfaces
- * promptly, ahead of older undelivered ones.
+ * Calling once/day with the same `feed` walks you down the week's best stories
+ * with no repeats — the client stores nothing. Re-ranking the current window on
+ * every call means a fresh high-scoring story still surfaces promptly, ahead of
+ * older undelivered ones. Use distinct feed names for distinct consumers.
  */
 import { db, type StoryRow } from "./db.js";
 import { config } from "./config.js";
@@ -25,48 +25,19 @@ export interface TopStory {
 
 export interface TopResult {
   stories: TopStory[];
-  nextCursor: string;
   feed: string;
-}
-
-interface CursorPayload {
-  feed: string;
-  issuedAt: number;
 }
 
 const FEED_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-export function encodeCursor(feed: string): string {
-  const payload: CursorPayload = { feed, issuedAt: Math.floor(Date.now() / 1000) };
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-}
-
-/** Decode a cursor to its feed name, or null if malformed. */
-export function decodeCursor(cursor: string): string | null {
-  try {
-    const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as CursorPayload;
-    if (payload && typeof payload.feed === "string" && FEED_RE.test(payload.feed)) {
-      return payload.feed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Resolve which feed a request targets. A valid cursor wins; otherwise an
- * explicit feed name; otherwise "default". Throws on an invalid explicit feed.
+ * Resolve and validate which feed a request targets: an explicit feed name, or
+ * "default". Throws on an invalid feed name.
  */
-export function resolveFeed(opts: { cursor?: string; feed?: string }): string {
-  if (opts.cursor) {
-    const fromCursor = decodeCursor(opts.cursor);
-    if (fromCursor) return fromCursor;
-    throw new Error("invalid cursor");
-  }
-  if (opts.feed) {
-    if (!FEED_RE.test(opts.feed)) throw new Error("invalid feed name");
-    return opts.feed;
+export function resolveFeed(feed?: string): string {
+  if (feed) {
+    if (!FEED_RE.test(feed)) throw new Error("invalid feed name");
+    return feed;
   }
   return "default";
 }
@@ -123,5 +94,5 @@ export function getTopStories(opts: TopOptions): TopResult {
     hnUrl: `https://news.ycombinator.com/item?id=${r.id}`,
   }));
 
-  return { stories, nextCursor: encodeCursor(opts.feed), feed: opts.feed };
+  return { stories, feed: opts.feed };
 }

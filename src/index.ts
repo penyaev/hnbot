@@ -3,7 +3,7 @@
  *
  * Endpoints:
  *   GET  /health                         (public)
- *   GET  /top?n=&days=&feed=&cursor=     (auth) top stories, dedup per feed
+ *   GET  /top?n=&days=&feed=             (auth) top stories, dedup per feed
  *   GET  /summary?days=&limit=&fresh=    (auth) LLM trend summary
  *   POST /ingest                         (auth) trigger a poll now
  */
@@ -33,7 +33,7 @@ api.get("/top", (c) => {
 
   let feed: string;
   try {
-    feed = resolveFeed({ cursor: q.cursor, feed: q.feed });
+    feed = resolveFeed(q.feed);
   } catch (e) {
     return c.json({ error: (e as Error).message }, 400);
   }

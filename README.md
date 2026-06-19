@@ -30,15 +30,17 @@ designed to deploy to Railway for ~$5/mo and forget about it.
 | Method | Path       | Auth | Notes |
 |--------|------------|------|-------|
 | GET    | `/health`  | no   | `{ ok, storyCount, windowDays }` |
-| GET    | `/top`     | yes  | `?n=10&days=7&feed=default&cursor=...` |
+| GET    | `/top`     | yes  | `?n=10&days=7&feed=default` |
 | GET    | `/summary` | yes  | `?days=3&limit=40&fresh=1` (`fresh=1` bypasses the daily cache) |
 | POST   | `/ingest`  | yes  | trigger a poll immediately |
 
 Authenticated endpoints require `Authorization: Bearer $API_TOKEN`.
 
-`/top` returns `{ stories: [{ id, title, url, by, score, descendants, time, ageHours, hnUrl }], nextCursor, feed }`.
-Pass `nextCursor` back on the next call to continue the same feed without repeats. Omit it
-(optionally with `feed=NAME`) to start/continue a named feed; default feed is `"default"`.
+`/top` returns `{ stories: [{ id, title, url, by, score, descendants, time, ageHours, hnUrl }], feed }`.
+Dedup state is server-side, keyed by `feed` (default `"default"`). Call once a day with the
+same `feed` and you walk down the window's best stories with no repeats — the client stores
+nothing. Use distinct feed names for distinct consumers (e.g. `daily`, a future bot) so they
+don't consume each other's stories.
 
 ## Local development
 
@@ -53,12 +55,11 @@ Then:
 ```sh
 export TOKEN=dev-token      # whatever you set as API_TOKEN
 curl -XPOST localhost:8080/ingest -H "Authorization: Bearer $TOKEN"
-curl "localhost:8080/top?n=5" -H "Authorization: Bearer $TOKEN"
+curl "localhost:8080/top?n=5&feed=daily" -H "Authorization: Bearer $TOKEN"
 curl "localhost:8080/summary?days=3" -H "Authorization: Bearer $TOKEN"
 ```
 
-Calling `/top` again with the returned `nextCursor` yields the next 5 stories, never the
-same ones.
+Calling `/top?feed=daily` again yields the next 5 stories, never the same ones.
 
 ## Deploy to Railway
 
