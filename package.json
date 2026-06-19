@@ -1,0 +1,30 @@
+{
+  "name": "hnbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal Hacker News digest service: top stories (sliding window, dedup) + LLM trend summaries.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.0",
+    "@hono/node-server": "^1.19.7",
+    "better-sqlite3": "^12.6.0",
+    "hono": "^4.10.7",
+    "node-cron": "^4.2.1",
+    "p-limit": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
