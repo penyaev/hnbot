@@ -4,8 +4,9 @@
  * directly — no separate cron worker needed.
  */
 import cron from "node-cron";
-import { config } from "./config.js";
+import { config, telegramEnabled } from "./config.js";
 import { cleanup, poll } from "./ingest.js";
+import { sendDailyToAll, sendTrendsToAll } from "./telegram.js";
 
 let polling = false;
 
@@ -35,6 +36,23 @@ export function startScheduler(): void {
     }
   });
   console.log(`[scheduler] poll="${config.pollCron}" cleanup="${config.cleanupCron}"`);
+
+  if (telegramEnabled) {
+    const tz = config.telegram.tz;
+    cron.schedule(
+      config.telegram.dailyCron,
+      () => void sendDailyToAll().catch((e) => console.error("[scheduler] daily send failed:", e)),
+      { timezone: tz },
+    );
+    cron.schedule(
+      config.telegram.summaryCron,
+      () => void sendTrendsToAll().catch((e) => console.error("[scheduler] trends send failed:", e)),
+      { timezone: tz },
+    );
+    console.log(
+      `[scheduler] telegram daily="${config.telegram.dailyCron}" trends="${config.telegram.summaryCron}" tz=${tz}`,
+    );
+  }
 
   // Kick off an initial poll shortly after boot so a fresh deploy has data.
   setTimeout(() => void runPoll(), 1000);

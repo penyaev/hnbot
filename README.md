@@ -124,17 +124,36 @@ volume. Summaries on Sonnet 4.6 over ~40 titles cost a fraction of a cent each.
 
 ### Shipping changes
 
-The service is **not** connected to GitHub, so `git push` does **not** redeploy. To ship
-local changes, run `railway up` again. To enable push-to-deploy instead, connect the
-service to the GitHub repo in the Railway dashboard (Settings → Source) — pushes to the
-default branch then trigger a build.
+The service is connected to the GitHub repo (`penyaev/hnbot`, branch `master`), so **`git
+push` triggers a build and redeploy automatically**. `railway up` still works for pushing
+local changes without committing. Env vars live in Railway and persist across deploys.
+
+## Telegram bot
+
+An optional delivery layer, built into the same service. Sends the top stories every
+morning and a trends summary twice a week, with a **More stories** button to pull the next
+batch on demand. It calls the in-process feed/summary logic directly (no HTTP hop) and uses
+a per-chat dedup feed (`tg-<chatId>`), so each subscriber walks their own no-repeat stream.
+
+**Setup:**
+
+1. Create a bot: message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token.
+2. Set it on the service (triggers a redeploy): `railway variables --set "TELEGRAM_BOT_TOKEN=..."`
+3. (Recommended) lock the bot to yourself: message the bot once, note the user id it
+   echoes, then `railway variables --set "TELEGRAM_ALLOWED_USER_IDS=<your-id>"`.
+4. Message the bot `/start`.
+
+On boot the service registers a Telegram webhook at `${PUBLIC_URL}/telegram/webhook`
+(authenticated by a secret derived from the bot token). `PUBLIC_URL` defaults to Railway's
+public domain.
+
+**Commands:** `/start` (subscribe), `/top` (top stories now), `/trends` (summary now),
+`/stop` (unsubscribe). The schedule sends at `TELEGRAM_DAILY_CRON` (daily) and
+`TELEGRAM_SUMMARY_CRON` (trends), both in `TELEGRAM_TZ`.
 
 ## Configuration
 
-See `.env.example`. Key knobs: `WINDOW_DAYS`, `SUMMARY_DAYS`, `SUMMARY_LIMIT`,
-`SUMMARY_MODEL`, `POLL_CRON`, `CLEANUP_CRON`, `FETCH_CONCURRENCY`.
-
-## Roadmap
-
-A delivery layer (Telegram/Slack) will be a thin client of `/top` and `/summary` on a
-schedule — no change to this core.
+See `.env.example`. Core knobs: `WINDOW_DAYS`, `SUMMARY_DAYS`, `SUMMARY_LIMIT`,
+`SUMMARY_MODEL`, `POLL_CRON`, `CLEANUP_CRON`, `FETCH_CONCURRENCY`. Telegram:
+`TELEGRAM_BOT_TOKEN`, `PUBLIC_URL`, `TELEGRAM_ALLOWED_USER_IDS`, `TELEGRAM_STORIES`,
+`TELEGRAM_TZ`, `TELEGRAM_DAILY_CRON`, `TELEGRAM_SUMMARY_CRON`.

@@ -53,6 +53,47 @@ export const config = {
 
   /** Concurrency limit when fetching individual HN items. */
   fetchConcurrency: int("FETCH_CONCURRENCY", 15),
+
+  telegram: {
+    /** BotFather token. When empty, all Telegram features are disabled. */
+    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
+
+    /**
+     * Public base URL of this service (no trailing slash), used to register the
+     * Telegram webhook, e.g. https://hnbot-production.up.railway.app.
+     * Falls back to Railway's injected RAILWAY_PUBLIC_DOMAIN if present.
+     */
+    publicUrl:
+      process.env.PUBLIC_URL ??
+      (process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : ""),
+
+    /**
+     * Allowlist of Telegram numeric user IDs permitted to use the bot.
+     * Empty = open (anyone who messages the bot can subscribe) — set this for a
+     * private bot.
+     */
+    allowedUserIds: (process.env.TELEGRAM_ALLOWED_USER_IDS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+
+    /** Stories per Telegram message (daily send and each "More stories" tap). */
+    stories: int("TELEGRAM_STORIES", 8),
+
+    /** IANA timezone for the Telegram send schedule. */
+    tz: str("TELEGRAM_TZ", "Europe/Berlin"),
+
+    /** Cron for the daily top-stories send (in TELEGRAM_TZ). Default 08:00 daily. */
+    dailyCron: str("TELEGRAM_DAILY_CRON", "0 8 * * *"),
+
+    /** Cron for the trends summary send (in TELEGRAM_TZ). Default 08:00 Tue & Fri. */
+    summaryCron: str("TELEGRAM_SUMMARY_CRON", "0 8 * * 2,5"),
+  },
 } as const;
+
+/** True when a bot token is configured. */
+export const telegramEnabled = config.telegram.botToken !== "";
 
 export type Config = typeof config;

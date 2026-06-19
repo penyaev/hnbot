@@ -44,7 +44,32 @@ function migrate(): void {
       PRIMARY KEY (feed, story_id)
     );
     CREATE INDEX IF NOT EXISTS idx_deliveries_at ON deliveries(delivered_at);
+
+    CREATE TABLE IF NOT EXISTS subscribers (
+      chat_id    TEXT PRIMARY KEY,
+      user_id    TEXT,
+      username   TEXT,
+      created_at INTEGER NOT NULL
+    );
   `);
+}
+
+export function addSubscriber(chatId: string, userId: string, username: string | null): void {
+  db.prepare(
+    `INSERT INTO subscribers (chat_id, user_id, username, created_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET user_id = excluded.user_id, username = excluded.username`,
+  ).run(chatId, userId, username, Math.floor(Date.now() / 1000));
+}
+
+export function removeSubscriber(chatId: string): boolean {
+  return db.prepare("DELETE FROM subscribers WHERE chat_id = ?").run(chatId).changes > 0;
+}
+
+export function listSubscriberChatIds(): string[] {
+  return (db.prepare("SELECT chat_id FROM subscribers").all() as { chat_id: string }[]).map(
+    (r) => r.chat_id,
+  );
 }
 
 // Run migration at module load, before any other module prepares statements

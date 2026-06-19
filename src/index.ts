@@ -9,19 +9,34 @@
  */
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { config } from "./config.js";
+import { config, telegramEnabled } from "./config.js";
 import { storyCount } from "./db.js";
 import { requireAuth } from "./auth.js";
 import { poll } from "./ingest.js";
 import { getTopStories, resolveFeed } from "./topStories.js";
 import { getSummary } from "./summary.js";
 import { startScheduler } from "./scheduler.js";
+import { handleUpdate, registerWebhook, webhookSecret } from "./telegram.js";
 
 const app = new Hono();
 
 app.get("/health", (c) =>
   c.json({ ok: true, storyCount: storyCount(), windowDays: config.windowDays }),
 );
+
+// Telegram webhook — registered before the authenticated router so the latter's
+// wildcard auth middleware doesn't intercept it. Authenticated instead via the
+// secret_token header Telegram echoes back.
+app.post("/telegram/webhook", async (c) => {
+  if (!telegramEnabled) return c.text("ok");
+  if (c.req.header("x-telegram-bot-api-secret-token") !== webhookSecret) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const update = await c.req.json().catch(() => null);
+  // Respond 200 immediately; process asynchronously so Telegram doesn't retry.
+  if (update) void handleUpdate(update).catch((e) => console.error("[telegram] update failed:", e));
+  return c.text("ok");
+});
 
 const api = new Hono();
 api.use("*", requireAuth);
@@ -72,6 +87,7 @@ api.post("/ingest", async (c) => {
 app.route("/", api);
 
 startScheduler();
+void registerWebhook();
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`[hnbot] listening on :${info.port} (db=${config.dbPath})`);
