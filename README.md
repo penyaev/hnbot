@@ -11,6 +11,9 @@ A background scheduler polls the [HN API](https://github.com/HackerNews/API) eve
 of hours and keeps a rolling window in SQLite. It's a single always-on Node service —
 designed to deploy to Railway for ~$5/mo and forget about it.
 
+> **Status:** deployed on Railway (project `hnbot`, region `sfo`), persisting to a volume
+> mounted at `/data`. The scheduler keeps itself current with no manual action.
+
 ## How it works
 
 - **Ingestion** (`src/ingest.ts`): polls `beststories` + `topstories`, fetches each item
@@ -59,15 +62,29 @@ same ones.
 
 ## Deploy to Railway
 
-1. Push this repo to GitHub and create a Railway project from it. The included `Dockerfile`
-   + `railway.json` are used automatically.
-2. Add a **Volume** mounted at `/data`.
-3. Set env vars: `ANTHROPIC_API_KEY`, `API_TOKEN`, `DB_PATH=/data/hnbot.db` (plus any
-   tuning overrides from `.env.example`).
-4. Healthcheck path is `/health`; start command is `node dist/index.js`.
+Deployed via the Railway CLI from local files (the included `Dockerfile` + `railway.json`
+are used automatically):
 
-The Hobby plan (~$5/mo, includes $5 of usage) comfortably covers one small service plus a
-tiny SQLite volume. Summaries on Sonnet 4.6 over ~40 titles cost a fraction of a cent each.
+```sh
+railway login
+railway init --name hnbot
+railway add --service hnbot --variables "API_TOKEN=..." --variables "DB_PATH=/data/hnbot.db"
+railway volume add -m /data          # SQLite lives here, persists across redeploys
+railway variables --set "ANTHROPIC_API_KEY=sk-ant-..."
+railway up                           # build Dockerfile remotely + deploy
+railway domain                       # assign a public URL
+```
+
+Healthcheck path is `/health`; start command is `node dist/index.js`. The Hobby plan
+(~$5/mo, includes $5 of usage) comfortably covers one small service plus a tiny SQLite
+volume. Summaries on Sonnet 4.6 over ~40 titles cost a fraction of a cent each.
+
+### Shipping changes
+
+The service is **not** connected to GitHub, so `git push` does **not** redeploy. To ship
+local changes, run `railway up` again. To enable push-to-deploy instead, connect the
+service to the GitHub repo in the Railway dashboard (Settings → Source) — pushes to the
+default branch then trigger a build.
 
 ## Configuration
 
