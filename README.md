@@ -27,20 +27,62 @@ designed to deploy to Railway for ~$5/mo and forget about it.
 
 ## API
 
-| Method | Path       | Auth | Notes |
-|--------|------------|------|-------|
-| GET    | `/health`  | no   | `{ ok, storyCount, windowDays }` |
-| GET    | `/top`     | yes  | `?n=10&days=7&feed=default` |
-| GET    | `/summary` | yes  | `?days=3&limit=40&fresh=1` (`fresh=1` bypasses the daily cache) |
-| POST   | `/ingest`  | yes  | trigger a poll immediately |
+All endpoints except `/health` require `Authorization: Bearer $API_TOKEN`.
 
-Authenticated endpoints require `Authorization: Bearer $API_TOKEN`.
+| Method | Path       | Auth |
+|--------|------------|------|
+| GET    | `/health`  | no   |
+| GET    | `/top`     | yes  |
+| GET    | `/summary` | yes  |
+| POST   | `/ingest`  | yes  |
 
-`/top` returns `{ stories: [{ id, title, url, by, score, descendants, time, ageHours, hnUrl }], feed }`.
-Dedup state is server-side, keyed by `feed` (default `"default"`). Call once a day with the
-same `feed` and you walk down the window's best stories with no repeats — the client stores
-nothing. Use distinct feed names for distinct consumers (e.g. `daily`, a future bot) so they
-don't consume each other's stories.
+### `GET /health`
+
+Liveness probe (used by Railway). No params. Returns `{ ok, storyCount, windowDays }`
+where `storyCount` is the number of stories currently in the window.
+
+### `GET /top`
+
+The deduplicated top-stories feed.
+
+| Param  | Type   | Default        | Meaning |
+|--------|--------|----------------|---------|
+| `n`    | int    | `10`           | How many stories to return. Clamped to `1..100`. |
+| `days` | int    | `WINDOW_DAYS` (7) | Window length: only consider stories submitted in the last this-many days. Min `1`. Can be smaller than the configured window (e.g. `days=2` for "just the last couple days") but not usefully larger than what's been ingested. |
+| `feed` | string | `"default"`    | Which dedup feed to draw from. Must match `^[A-Za-z0-9_-]{1,64}$` or the call returns `400`. |
+
+**How `feed` works:** dedup state is server-side, keyed by this name. Each call records
+the stories it returns against the feed and excludes anything already returned to that feed
+within the window. So calling once a day with the same `feed` walks you down the window's
+best stories with no repeats — the client stores nothing. Use distinct feed names for
+distinct consumers (e.g. `daily` for you, `telegram` for a future bot) so they don't eat
+each other's stories. A brand-new feed name starts with an empty history.
+
+Returns `{ feed, stories: [{ id, title, url, by, score, descendants, time, ageHours, hnUrl }] }`,
+ranked by peak score (highest first). `score` is the highest score observed while polling;
+`time` is the HN submission time (unix seconds); `ageHours` is hours since submission;
+`hnUrl` links to the HN discussion.
+
+### `GET /summary`
+
+LLM-generated digest of themes and trends over the recent window.
+
+| Param   | Type   | Default          | Meaning |
+|---------|--------|------------------|---------|
+| `days`  | int    | `SUMMARY_DAYS` (3) | Look-back window: summarize stories submitted in the last this-many days. Min `1`. |
+| `limit` | int    | `SUMMARY_LIMIT` (40) | How many top stories (by score) to feed the model. Clamped to `1..200`. Higher = broader coverage but more tokens. |
+| `fresh` | bool   | `false`          | `1`/`true` bypasses the cache and forces a new LLM call. |
+
+Returns `{ summary, model, days, basedOn: [{ id, title, score, descendants, domain, hnUrl }] }`,
+where `summary` is Markdown and `basedOn` is the exact story set the summary was built from.
+Results are cached per `(calendar-day, days, limit)` to avoid re-billing identical requests;
+use `fresh=1` to refresh mid-day.
+
+### `POST /ingest`
+
+Triggers an HN poll immediately (the scheduler also does this every `POLL_CRON`). No params.
+Returns `{ ok, fetched, upserted, storyCount }`. Useful right after a fresh deploy to
+populate the window without waiting for the next scheduled poll.
 
 ## Local development
 
