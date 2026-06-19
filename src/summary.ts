@@ -16,7 +16,7 @@ function anthropic(): Anthropic {
   return client;
 }
 
-const SYSTEM_PROMPT = `You are a concise tech-news analyst. You are given the top Hacker News stories from the past few days, each with its score (points) and comment count. Produce a brief, skimmable digest in Markdown with these sections:
+const SYSTEM_PROMPT = `You are a concise tech-news analyst. You are given the top Hacker News stories from the past few days, each with its score (points), comment count, and a source link. Produce a brief, skimmable digest in Markdown with these sections:
 
 ## TL;DR
 2-4 sentences on the single biggest things that happened.
@@ -26,6 +26,8 @@ Group the stories into a handful of themes (e.g. AI, security, dev tools, busine
 
 ## Notable stories
 5-8 bullets for the standout individual stories, each: the headline as a short phrase, why it matters in a clause, and the score/comment signal in parentheses.
+
+SOURCE LINKS (important): whenever you reference a specific story — in ANY section, including the TL;DR and themes — append a Markdown link to its source immediately after the mention, like "... a supply-chain nightmare ([link](https://example.com/...))". Use ONLY the exact URL given for that story in the list below; never invent, guess, or modify a URL, and never link to a story that isn't in the list. Every bullet in "Notable stories" must include its link.
 
 Be factual and grounded in the titles provided — do not invent details not implied by a title. Keep the whole thing tight; a busy reader should get the picture in under a minute.`;
 
@@ -44,6 +46,8 @@ export interface SummaryStory {
   score: number;
   descendants: number | null;
   domain: string;
+  /** Source link the model cites: the article URL, falling back to the HN discussion. */
+  link: string;
   hnUrl: string;
 }
 
@@ -83,14 +87,18 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
   }
 
   const rows = gatherStories(days, limit);
-  const basedOn: SummaryStory[] = rows.map((r) => ({
-    id: r.id,
-    title: r.title,
-    score: r.score,
-    descendants: r.descendants,
-    domain: domainOf(r.url),
-    hnUrl: `https://news.ycombinator.com/item?id=${r.id}`,
-  }));
+  const basedOn: SummaryStory[] = rows.map((r) => {
+    const hnUrl = `https://news.ycombinator.com/item?id=${r.id}`;
+    return {
+      id: r.id,
+      title: r.title,
+      score: r.score,
+      descendants: r.descendants,
+      domain: domainOf(r.url),
+      link: r.url ?? hnUrl,
+      hnUrl,
+    };
+  });
 
   if (basedOn.length === 0) {
     const empty: SummaryResult = {
@@ -105,7 +113,7 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
   const list = basedOn
     .map(
       (s, i) =>
-        `${i + 1}. ${s.title} — ${s.score} pts, ${s.descendants ?? 0} comments — ${s.domain}`,
+        `${i + 1}. ${s.title} — ${s.score} pts, ${s.descendants ?? 0} comments — ${s.domain} — ${s.link}`,
     )
     .join("\n");
 
