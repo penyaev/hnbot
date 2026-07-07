@@ -17,7 +17,7 @@ function anthropic(): Anthropic {
   return client;
 }
 
-const SYSTEM_PROMPT = `You are a concise tech-news analyst. You are given the top Hacker News stories from the past few days. Most include a short summary of the article and its discussion; some have only a title. Each has a score (points), comment count, and a source link. Produce a brief, skimmable digest in Markdown with these sections:
+const SYSTEM_PROMPT = `You are a concise tech-news analyst. You are given the top Hacker News stories from the past few days, each tagged with an id like [[3]]. Most include a short summary of the article and its discussion; some have only a title. Each has a score (points) and comment count. Produce a brief, skimmable digest in Markdown with these sections:
 
 ## TL;DR
 2-4 sentences on the single biggest things that happened.
@@ -28,7 +28,7 @@ Group the stories into a handful of themes (e.g. AI, security, dev tools, busine
 ## Notable stories
 5-8 bullets for the standout individual stories, each: the headline as a short phrase, why it matters in a clause (grounded in its summary), and the score/comment signal in parentheses.
 
-SOURCE LINKS (important): whenever you reference a specific story from the list — in ANY section, including the TL;DR and themes — append a Markdown link to its source immediately after the mention, like "... a supply-chain nightmare ([link](https://example.com/...))". Use ONLY the exact URL given for that story in the list below; never invent, guess, or modify a URL. If you mention something that is NOT its own entry in the list (a forked project, a company homepage, a related tool named only in passing), do NOT attach a link to it — just name it in plain text. Every bullet in "Notable stories" must include its link.
+CITATIONS (important): whenever you reference a specific story from the list — in ANY section, including the TL;DR and themes — cite it by appending its id marker immediately after the mention, exactly as given, e.g. "... a supply-chain nightmare [[12]]". Do NOT write URLs yourself — the marker becomes the link automatically. Cite only ids that appear in the list. If you mention something that is NOT its own entry in the list (a forked project, a company homepage, a related tool named only in passing), do NOT cite it — just name it in plain text. Every bullet in "Notable stories" must end with its [[id]] citation.
 
 Be factual and grounded in the summaries provided — do not invent details. Keep the whole thing tight; a busy reader should get the picture in under a minute.`;
 
@@ -116,7 +116,7 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
 
   const list = basedOn
     .map((s, i) => {
-      const head = `${i + 1}. ${s.title} — ${s.score} pts, ${s.descendants ?? 0} comments — ${s.domain} — ${s.link}`;
+      const head = `[[${i + 1}]] ${s.title} — ${s.score} pts, ${s.descendants ?? 0} comments — ${s.domain}`;
       return s.summary ? `${head}\n   Summary: ${s.summary}` : head;
     })
     .join("\n\n");
@@ -136,13 +136,22 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
     .join("\n")
     .trim();
 
-  // Defense-in-depth: unwrap any link whose URL we didn't actually provide, so a
-  // hallucinated/guessed URL can never reach the reader (the link text is kept).
+  // Expand [[n]] citation markers into real Markdown links from our own data — the
+  // model never handles URLs, so links are always correct. Out-of-range or malformed
+  // markers are dropped.
+  const expanded = raw.replace(/\[\[(\d+)\]\]/g, (_m, n: string) => {
+    const story = basedOn[Number(n) - 1];
+    return story ? `([link](${story.link}))` : "";
+  });
+
+  // Backstop: if the model wrote a raw URL anyway, unwrap it unless it's one we provided.
   const allowed = new Set(basedOn.flatMap((s) => [s.link, s.hnUrl]));
-  const summary = raw.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-    (match, text: string, url: string) => (allowed.has(url) ? match : text),
-  );
+  const summary = expanded
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (match, text: string, url: string) =>
+      allowed.has(url) ? match : text,
+    )
+    .replace(/ *\(\s*\)/g, "") // tidy any empty parens left by a dropped marker
+    .trim();
 
   const result: SummaryResult = { summary, model: config.summaryModel, days, basedOn };
   if (!opts.noCache) cache.set(cacheKey, result);
