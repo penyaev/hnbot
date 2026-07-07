@@ -63,6 +63,54 @@ function migrate(): void {
   addColumn("stories", "summarized_at", "INTEGER");
   addColumn("stories", "summary_attempts", "INTEGER NOT NULL DEFAULT 0");
   db.exec("CREATE INDEX IF NOT EXISTS idx_stories_summarized ON stories(summarized_at)");
+
+  migrateFts();
+}
+
+/**
+ * Full-text search index over stories (title + summary), for the ask/search agent.
+ * External-content FTS5 table synced to `stories` via triggers; backfilled once
+ * on first creation. Must run after the summary column exists (triggers reference it).
+ */
+function migrateFts(): void {
+  // Was the FTS table already present? (Can't use `count(*) FROM stories_fts` to
+  // detect an empty index — for an external-content table that reads through to
+  // the content table and returns the story count, not the index term count.)
+  const ftsExisted = !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stories_fts'")
+    .get();
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS stories_fts USING fts5(
+      title, summary, content='stories', content_rowid='id'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS stories_fts_ai AFTER INSERT ON stories BEGIN
+      INSERT INTO stories_fts(rowid, title, summary)
+      VALUES (new.id, new.title, coalesce(new.summary, ''));
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS stories_fts_ad AFTER DELETE ON stories BEGIN
+      INSERT INTO stories_fts(stories_fts, rowid, title, summary)
+      VALUES ('delete', old.id, old.title, coalesce(old.summary, ''));
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS stories_fts_au AFTER UPDATE OF title, summary ON stories BEGIN
+      INSERT INTO stories_fts(stories_fts, rowid, title, summary)
+      VALUES ('delete', old.id, old.title, coalesce(old.summary, ''));
+      INSERT INTO stories_fts(rowid, title, summary)
+      VALUES (new.id, new.title, coalesce(new.summary, ''));
+    END;
+  `);
+
+  // On first creation, build the index from the existing content rows. The
+  // 'rebuild' command is the canonical way to (re)populate an external-content
+  // FTS5 index (a manual INSERT..SELECT can leave the term index out of sync).
+  // No-op on a brand-new empty DB; on an existing DB it indexes prior stories.
+  // Once the table exists, the sync triggers keep it current, so we skip this.
+  if (!ftsExisted) {
+    db.exec("INSERT INTO stories_fts(stories_fts) VALUES('rebuild')");
+  }
 }
 
 /** ALTER TABLE ADD COLUMN only if the column doesn't already exist. */
@@ -118,6 +166,46 @@ export function summaryCount(): number {
   return (db.prepare("SELECT COUNT(*) AS c FROM stories WHERE summary IS NOT NULL").get() as {
     c: number;
   }).c;
+}
+
+/** Build a safe FTS5 MATCH expression from free text: quoted terms joined with OR (for recall). */
+function ftsMatch(query: string): string | null {
+  const terms = Array.from(
+    new Set((query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((t) => t.length >= 2)),
+  ).slice(0, 12);
+  if (terms.length === 0) return null;
+  return terms.map((t) => `"${t}"`).join(" OR ");
+}
+
+/** Full-text search the corpus (title + summary), BM25-ranked. Optional recency window (days). */
+export function searchStories(query: string, days: number | undefined, limit: number): StoryRow[] {
+  const match = ftsMatch(query);
+  if (!match) return [];
+  const params: Record<string, unknown> = { match, limit };
+  let where = "stories_fts MATCH @match";
+  if (days && days > 0) {
+    where += " AND s.time >= @cutoff";
+    params.cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+  }
+  return db
+    .prepare(
+      `SELECT s.* FROM stories_fts f JOIN stories s ON s.id = f.rowid
+       WHERE ${where} ORDER BY bm25(stories_fts) LIMIT @limit`,
+    )
+    .all(params) as StoryRow[];
+}
+
+/** Map of story id → source link (article URL, falling back to the HN discussion). */
+export function getStoryLinks(ids: number[]): Map<number, string> {
+  const links = new Map<number, string>();
+  if (ids.length === 0) return links;
+  const rows = db
+    .prepare(`SELECT id, url FROM stories WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .all(...ids) as { id: number; url: string | null }[];
+  for (const r of rows) {
+    links.set(r.id, r.url ?? `https://news.ycombinator.com/item?id=${r.id}`);
+  }
+  return links;
 }
 
 // Run migration at module load, before any other module prepares statements

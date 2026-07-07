@@ -16,6 +16,7 @@ import { poll } from "./ingest.js";
 import { summarizePending } from "./storySummary.js";
 import { getTopStories, resolveFeed } from "./topStories.js";
 import { getSummary } from "./summary.js";
+import { ask } from "./ask.js";
 import { startScheduler } from "./scheduler.js";
 import { handleUpdate, registerWebhook, webhookSecret } from "./telegram.js";
 
@@ -76,6 +77,18 @@ api.get("/summary", async (c) => {
     return c.json(result);
   } catch (e) {
     console.error("summary failed:", e);
+    return c.json({ error: (e as Error).message }, 500);
+  }
+});
+
+api.get("/ask", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (!q) return c.json({ error: "missing query param: q" }, 400);
+  try {
+    const result = await ask(q);
+    return c.json({ question: q, ...result });
+  } catch (e) {
+    console.error("ask failed:", e);
     return c.json({ error: (e as Error).message }, 500);
   }
 });

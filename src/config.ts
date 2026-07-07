@@ -74,6 +74,16 @@ export const config = {
     fetchTimeoutMs: int("ARTICLE_FETCH_TIMEOUT_MS", 12000),
   },
 
+  /** Conversational search agent (natural-language questions over the corpus). */
+  ask: {
+    /** Model that runs the tool-use search agent. */
+    model: str("ASK_MODEL", "claude-sonnet-5"),
+    /** Max tool-use rounds per question (bounds cost/latency). */
+    maxIterations: int("ASK_MAX_ITERATIONS", 5),
+    /** Max stories returned per search_stories tool call. */
+    searchLimit: int("ASK_SEARCH_LIMIT", 8),
+  },
+
   telegram: {
     /** BotFather token. When empty, all Telegram features are disabled. */
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",

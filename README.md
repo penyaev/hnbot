@@ -31,6 +31,10 @@ designed to deploy to Railway for ~$5/mo and forget about it.
   paragraphs for the top window stories to `SUMMARY_MODEL` (Sonnet 4.6) and returns a
   Markdown digest with inline source links (cached per calendar day). Expensive
   article-reading happens once per story, not per digest.
+- **Ask agent** (`src/ask.ts`): a natural-language Q&A agent (`ASK_MODEL`) over the corpus.
+  It's given a `search_stories` tool backed by a SQLite **FTS5** full-text index (BM25) over
+  `title + summary`, searches as many times as needed, and answers grounded in the results
+  with correct source links (cited via `[[id]]` markers we expand server-side).
 
 ## API
 
@@ -41,6 +45,7 @@ All endpoints except `/health` require `Authorization: Bearer $API_TOKEN`.
 | GET    | `/health`  | no   |
 | GET    | `/top`     | yes  |
 | GET    | `/summary` | yes  |
+| GET    | `/ask`     | yes  |
 | POST   | `/ingest`  | yes  |
 
 ### `GET /health`
@@ -85,6 +90,19 @@ Returns `{ summary, model, days, basedOn: [{ id, title, score, descendants, doma
 where `summary` is Markdown and `basedOn` is the exact story set the summary was built from.
 Results are cached per `(calendar-day, days, limit)` to avoid re-billing identical requests;
 use `fresh=1` to refresh mid-day.
+
+### `GET /ask`
+
+Ask a natural-language question about recent stories.
+
+| Param | Type   | Meaning |
+|-------|--------|---------|
+| `q`   | string | The question (required). E.g. `what's new around Rust lately`. |
+
+The agent searches the FTS corpus (possibly several times) and returns
+`{ question, answer, usedIds }`, where `answer` is Markdown with inline source links and
+`usedIds` are the HN ids it cited. Searches cover the retained summarized corpus + current
+window titles.
 
 ### `POST /ingest`
 
@@ -156,15 +174,18 @@ On boot the service registers a Telegram webhook at `${PUBLIC_URL}/telegram/webh
 (authenticated by a secret derived from the bot token). `PUBLIC_URL` defaults to Railway's
 public domain.
 
-**Commands:** `/start` (subscribe), `/top` (top stories now), `/trends` (summary now),
-`/stop` (unsubscribe). The schedule sends at `TELEGRAM_DAILY_CRON` (daily) and
-`TELEGRAM_SUMMARY_CRON` (trends), both in `TELEGRAM_TZ`.
+**Commands:** `/ask <question>` (or just send any plain-text message — it's treated as a
+question for the search agent), `/top` (top stories now), `/trends` (summary now), `/start`
+(subscribe), `/stop` (unsubscribe). Long operations (`/trends`, `/ask`) show an animated
+progress bar that's replaced in place with the result. The schedule sends at
+`TELEGRAM_DAILY_CRON` (daily) and `TELEGRAM_SUMMARY_CRON` (trends), both in `TELEGRAM_TZ`.
 
 ## Configuration
 
 See `.env.example`. Core knobs: `WINDOW_DAYS`, `SUMMARY_DAYS`, `SUMMARY_LIMIT`,
 `SUMMARY_MODEL`, `POLL_CRON`, `CLEANUP_CRON`, `FETCH_CONCURRENCY`. Per-story summaries:
 `STORY_SUMMARY_MODEL`, `SUMMARY_MIN_SCORE`, `STORY_SUMMARY_MAX_PER_POLL`,
-`STORY_SUMMARY_CONCURRENCY`, `ARTICLE_MAX_CHARS`, `COMMENTS_PER_STORY`. Telegram:
+`STORY_SUMMARY_CONCURRENCY`, `ARTICLE_MAX_CHARS`, `COMMENTS_PER_STORY`. Ask agent:
+`ASK_MODEL`, `ASK_MAX_ITERATIONS`, `ASK_SEARCH_LIMIT`. Telegram:
 `TELEGRAM_BOT_TOKEN`, `PUBLIC_URL`, `TELEGRAM_ALLOWED_USER_IDS`, `TELEGRAM_STORIES`,
 `TELEGRAM_TZ`, `TELEGRAM_DAILY_CRON`, `TELEGRAM_SUMMARY_CRON`.

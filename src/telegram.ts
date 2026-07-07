@@ -12,6 +12,7 @@ import { config, telegramEnabled } from "./config.js";
 import { addSubscriber, listSubscriberChatIds, removeSubscriber } from "./db.js";
 import { getTopStories, type TopStory } from "./topStories.js";
 import { getSummary } from "./summary.js";
+import { ask } from "./ask.js";
 
 const API = `https://api.telegram.org/bot${config.telegram.botToken}`;
 
@@ -144,17 +145,20 @@ async function editText(chatId: string, messageId: number, text: string, disable
 }
 
 /**
- * Send the trends summary to a chat, showing an animated progress bar while the
- * digest is generated, then replacing it in place with the result. The animation
- * loop is awaited before the final edit, so a stray frame can't overwrite it.
+ * Post a placeholder with an animated progress bar, run `worker`, then replace
+ * the placeholder in place with the resulting HTML chunks (extra chunks sent as
+ * new messages). The animation loop is awaited before the final edit so a stray
+ * frame can't overwrite the result. Used for anything with a noticeable wait.
  */
-export async function sendTrendsTo(chatId: string): Promise<void> {
-  const waitingText = (frame: number) =>
-    `📊 <b>Generating HN trends…</b>\n${progressBar(frame)}`;
-
+async function runWithProgress(
+  chatId: string,
+  label: string,
+  worker: () => Promise<string[]>,
+): Promise<void> {
+  const waiting = (frame: number) => `${label}\n${progressBar(frame)}`;
   const placeholder = await tg("sendMessage", {
     chat_id: chatId,
-    text: waitingText(0),
+    text: waiting(0),
     parse_mode: "HTML",
   });
   const messageId = (placeholder.result as { message_id?: number } | undefined)?.message_id;
@@ -163,33 +167,47 @@ export async function sendTrendsTo(chatId: string): Promise<void> {
   const animate = async (): Promise<void> => {
     let frame = 1;
     while (!done && messageId) {
-      // interruptible wait so we stop within ~200ms of `done`
-      for (let t = 0; t < 2000 && !done; t += 200) await delay(200);
+      for (let t = 0; t < 2000 && !done; t += 200) await delay(200); // interruptible wait
       if (done) break;
-      await editText(chatId, messageId, waitingText(frame++)).catch(() => {});
+      await editText(chatId, messageId, waiting(frame++)).catch(() => {});
     }
   };
   const anim = animate();
 
   try {
-    const { summary, days } = await getSummary({});
+    const chunks = await worker();
     done = true;
     await anim; // ensure no bar edit is still in flight before writing the result
-
-    const header = `📊 <b>HN trends — last ${days} days</b>`;
-    const chunks = chunk(mdToHtml(summary));
-    const first = `${header}\n\n${chunks[0]}`;
+    const first = chunks[0] ?? "(no result)";
     if (messageId) await editText(chatId, messageId, first, true);
     else await sendText(chatId, first);
     for (const part of chunks.slice(1)) await sendText(chatId, part);
   } catch (e) {
     done = true;
     await anim;
-    console.error("[telegram] trends send failed:", e);
-    const err = "⚠️ Couldn't generate the trends summary right now.";
+    console.error(`[telegram] ${label} failed:`, e);
+    const err = "⚠️ Something went wrong — try again in a moment.";
     if (messageId) await editText(chatId, messageId, err);
     else await sendText(chatId, err);
   }
+}
+
+/** Send the trends summary to a chat (with progress bar). */
+export async function sendTrendsTo(chatId: string): Promise<void> {
+  await runWithProgress(chatId, "📊 <b>Generating HN trends…</b>", async () => {
+    const { summary, days } = await getSummary({});
+    const header = `📊 <b>HN trends — last ${days} days</b>`;
+    const chunks = chunk(mdToHtml(summary));
+    return [`${header}\n\n${chunks[0]}`, ...chunks.slice(1)];
+  });
+}
+
+/** Answer a natural-language question via the search agent (with progress bar). */
+export async function sendAnswerTo(chatId: string, question: string): Promise<void> {
+  await runWithProgress(chatId, "🔎 <b>Searching the archive…</b>", async () => {
+    const { answer } = await ask(question);
+    return chunk(mdToHtml(answer));
+  });
 }
 
 // ---- scheduled fan-out ----
@@ -224,7 +242,15 @@ const WELCOME =
   "• /top — top stories now\n" +
   "• /trends — trends summary now\n" +
   "• /stop — unsubscribe\n\n" +
+  "💬 Or just ask me a question, like <i>what's new around Rust lately</i> or " +
+  "<i>was there anything about OpenAI this week</i>.\n\n" +
   "Tap <b>More stories</b> under any digest to pull the next batch.";
+
+const ASK_HINT =
+  "💬 Ask me about recent Hacker News stories, e.g.:\n" +
+  "• <i>what's new around Rust lately</i>\n" +
+  "• <i>was there anything about OpenAI this week</i>\n" +
+  "• <i>what was that story about a GitHub supply-chain attack</i>";
 
 export async function handleUpdate(update: TgUpdate): Promise<void> {
   if (update.message) {
@@ -237,7 +263,13 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
       );
       return;
     }
-    const cmd = (text ?? "").trim().split(/\s+/)[0].toLowerCase();
+    const body = (text ?? "").trim();
+    if (!body.startsWith("/")) {
+      // Any non-command message is a natural-language question for the agent.
+      if (body) await sendAnswerTo(chatId, body);
+      return;
+    }
+    const cmd = body.split(/\s+/)[0].split("@")[0].toLowerCase(); // strip @BotName in groups
     switch (cmd) {
       case "/start":
         addSubscriber(chatId, String(from?.id ?? ""), from?.username ?? null);
@@ -254,10 +286,16 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
       case "/trends":
         await sendTrendsTo(chatId);
         break;
+      case "/ask": {
+        const q = body.slice(cmd.length).trim();
+        if (q) await sendAnswerTo(chatId, q);
+        else await sendText(chatId, ASK_HINT);
+        break;
+      }
       default:
         await sendText(
           chatId,
-          "Commands: /start, /top, /trends, /stop.\nTap <b>More stories</b> under a digest for the next batch.",
+          "Commands: /ask, /top, /trends, /start, /stop.\nOr just ask a question in plain English.",
         );
     }
     return;
@@ -278,6 +316,7 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
 export async function registerCommands(): Promise<void> {
   await tg("setMyCommands", {
     commands: [
+      { command: "ask", description: "Ask about recent HN stories" },
       { command: "top", description: "Top Hacker News stories now" },
       { command: "trends", description: "Trends summary of the last few days" },
       { command: "start", description: "Subscribe to the daily digest" },
