@@ -221,11 +221,25 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
 
 // ---- webhook registration ----
 
+/** Populate the bot's command menu (the "/" autocomplete + menu button). */
+export async function registerCommands(): Promise<void> {
+  await tg("setMyCommands", {
+    commands: [
+      { command: "top", description: "Top Hacker News stories now" },
+      { command: "trends", description: "Trends summary of the last few days" },
+      { command: "start", description: "Subscribe to the daily digest" },
+      { command: "stop", description: "Unsubscribe" },
+    ],
+  });
+  console.log("[telegram] command menu registered");
+}
+
 export async function registerWebhook(): Promise<void> {
   if (!telegramEnabled) {
     console.log("[telegram] disabled (no TELEGRAM_BOT_TOKEN)");
     return;
   }
+  await registerCommands();
   if (!config.telegram.publicUrl) {
     console.warn("[telegram] PUBLIC_URL not set — skipping webhook registration");
     return;
