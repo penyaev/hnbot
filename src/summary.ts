@@ -28,7 +28,7 @@ Group the stories into a handful of themes (e.g. AI, security, dev tools, busine
 ## Notable stories
 5-8 bullets for the standout individual stories, each: the headline as a short phrase, why it matters in a clause (grounded in its summary), and the score/comment signal in parentheses.
 
-SOURCE LINKS (important): whenever you reference a specific story — in ANY section, including the TL;DR and themes — append a Markdown link to its source immediately after the mention, like "... a supply-chain nightmare ([link](https://example.com/...))". Use ONLY the exact URL given for that story in the list below; never invent, guess, or modify a URL, and never link to a story that isn't in the list. Every bullet in "Notable stories" must include its link.
+SOURCE LINKS (important): whenever you reference a specific story from the list — in ANY section, including the TL;DR and themes — append a Markdown link to its source immediately after the mention, like "... a supply-chain nightmare ([link](https://example.com/...))". Use ONLY the exact URL given for that story in the list below; never invent, guess, or modify a URL. If you mention something that is NOT its own entry in the list (a forked project, a company homepage, a related tool named only in passing), do NOT attach a link to it — just name it in plain text. Every bullet in "Notable stories" must include its link.
 
 Be factual and grounded in the summaries provided — do not invent details. Keep the whole thing tight; a busy reader should get the picture in under a minute.`;
 
@@ -130,11 +130,19 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  const summary = message.content
+  const raw = message.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("\n")
     .trim();
+
+  // Defense-in-depth: unwrap any link whose URL we didn't actually provide, so a
+  // hallucinated/guessed URL can never reach the reader (the link text is kept).
+  const allowed = new Set(basedOn.flatMap((s) => [s.link, s.hnUrl]));
+  const summary = raw.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    (match, text: string, url: string) => (allowed.has(url) ? match : text),
+  );
 
   const result: SummaryResult = { summary, model: config.summaryModel, days, basedOn };
   if (!opts.noCache) cache.set(cacheKey, result);
