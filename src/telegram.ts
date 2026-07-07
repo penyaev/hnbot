@@ -124,18 +124,71 @@ export async function sendTopStoriesTo(chatId: string, header = "🔥 <b>Top Hac
   await sendText(chatId, `${header}\n\n${formatStories(stories)}`, true);
 }
 
-/** Send the trends summary to a chat. */
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** An indeterminate progress bar frame (a filled bar that grows and repeats). */
+function progressBar(frame: number): string {
+  const width = 10;
+  const filled = (frame % width) + 1;
+  return "▰".repeat(filled) + "▱".repeat(width - filled);
+}
+
+async function editText(chatId: string, messageId: number, text: string, disablePreview = false): Promise<void> {
+  await tg("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "HTML",
+    ...(disablePreview ? { disable_web_page_preview: true } : {}),
+  });
+}
+
+/**
+ * Send the trends summary to a chat, showing an animated progress bar while the
+ * digest is generated, then replacing it in place with the result. The animation
+ * loop is awaited before the final edit, so a stray frame can't overwrite it.
+ */
 export async function sendTrendsTo(chatId: string): Promise<void> {
+  const waitingText = (frame: number) =>
+    `📊 <b>Generating HN trends…</b>\n${progressBar(frame)}`;
+
+  const placeholder = await tg("sendMessage", {
+    chat_id: chatId,
+    text: waitingText(0),
+    parse_mode: "HTML",
+  });
+  const messageId = (placeholder.result as { message_id?: number } | undefined)?.message_id;
+
+  let done = false;
+  const animate = async (): Promise<void> => {
+    let frame = 1;
+    while (!done && messageId) {
+      // interruptible wait so we stop within ~200ms of `done`
+      for (let t = 0; t < 2000 && !done; t += 200) await delay(200);
+      if (done) break;
+      await editText(chatId, messageId, waitingText(frame++)).catch(() => {});
+    }
+  };
+  const anim = animate();
+
   try {
     const { summary, days } = await getSummary({});
+    done = true;
+    await anim; // ensure no bar edit is still in flight before writing the result
+
     const header = `📊 <b>HN trends — last ${days} days</b>`;
-    const html = mdToHtml(summary);
-    const chunks = chunk(html);
-    await sendText(chatId, `${header}\n\n${chunks[0]}`);
+    const chunks = chunk(mdToHtml(summary));
+    const first = `${header}\n\n${chunks[0]}`;
+    if (messageId) await editText(chatId, messageId, first, true);
+    else await sendText(chatId, first);
     for (const part of chunks.slice(1)) await sendText(chatId, part);
   } catch (e) {
+    done = true;
+    await anim;
     console.error("[telegram] trends send failed:", e);
-    await sendText(chatId, "⚠️ Couldn't generate the trends summary right now.");
+    const err = "⚠️ Couldn't generate the trends summary right now.";
+    if (messageId) await editText(chatId, messageId, err);
+    else await sendText(chatId, err);
   }
 }
 
