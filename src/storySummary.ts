@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import pLimit from "p-limit";
 import { config } from "./config.js";
 import {
+  countStoriesToSummarize,
   listStoriesToSummarize,
   markSummaryAttempt,
   saveStorySummary,
@@ -72,15 +73,16 @@ export interface SummarizeResult {
   summarized: number;
 }
 
-/** Summarize a bounded batch of notable, not-yet-summarized stories. */
-export async function summarizePending(): Promise<SummarizeResult> {
-  if (!config.anthropicApiKey) {
-    return { attempted: 0, summarized: 0 };
-  }
+// Serializes all summarization work so the scheduled poll and a manual backfill
+// never select and double-process the same top-scored stories concurrently.
+let busy = false;
+
+/** Summarize one bounded batch of pending stories (no lock — callers hold `busy`). */
+async function runBatch(limitCount: number): Promise<SummarizeResult> {
   const pending = listStoriesToSummarize(
     config.storySummary.minScore,
     config.storySummary.maxAttempts,
-    config.storySummary.maxPerPoll,
+    limitCount,
   );
   if (pending.length === 0) return { attempted: 0, summarized: 0 };
 
@@ -105,7 +107,86 @@ export async function summarizePending(): Promise<SummarizeResult> {
       }),
     ),
   );
-
-  console.log(`[storySummary] attempted ${pending.length}, summarized ${summarized}`);
   return { attempted: pending.length, summarized };
+}
+
+/** Summarize a bounded batch of notable, not-yet-summarized stories (one poll's worth). */
+export async function summarizePending(): Promise<SummarizeResult> {
+  if (!config.anthropicApiKey || busy) return { attempted: 0, summarized: 0 };
+  busy = true;
+  try {
+    const r = await runBatch(config.storySummary.maxPerPoll);
+    if (r.attempted > 0) {
+      console.log(`[storySummary] attempted ${r.attempted}, summarized ${r.summarized}`);
+    }
+    return r;
+  } finally {
+    busy = false;
+  }
+}
+
+export interface BackfillResult {
+  batches: number;
+  attempted: number;
+  summarized: number;
+  remaining: number;
+  stopped: "drained" | "cap" | "no_progress" | "busy" | "no_key";
+}
+
+/**
+ * One-shot drain: summarize the whole ≥minScore backlog in batches until it's
+ * empty, a hard cap is hit, or a batch makes no progress (all remaining stories
+ * keep failing). Holds the summarization lock for its duration so the scheduled
+ * poll doesn't contend. Bounded so it can never loop forever.
+ */
+export async function backfillSummaries(maxStories = 2000): Promise<BackfillResult> {
+  if (!config.anthropicApiKey) {
+    return { batches: 0, attempted: 0, summarized: 0, remaining: 0, stopped: "no_key" };
+  }
+  if (busy) {
+    return {
+      batches: 0,
+      attempted: 0,
+      summarized: 0,
+      remaining: countStoriesToSummarize(config.storySummary.minScore, config.storySummary.maxAttempts),
+      stopped: "busy",
+    };
+  }
+
+  busy = true;
+  let batches = 0;
+  let attempted = 0;
+  let summarized = 0;
+  let stopped: BackfillResult["stopped"] = "drained";
+  try {
+    while (attempted < maxStories) {
+      const r = await runBatch(config.storySummary.maxPerPoll);
+      if (r.attempted === 0) {
+        stopped = "drained";
+        break;
+      }
+      batches++;
+      attempted += r.attempted;
+      summarized += r.summarized;
+      console.log(
+        `[backfill] batch ${batches}: +${r.summarized}/${r.attempted} (total ${summarized}/${attempted})`,
+      );
+      if (r.summarized === 0) {
+        // Whole batch failed (unreachable articles / dead links) — attempts were
+        // incremented, so those rows will fall out via maxAttempts; stop here.
+        stopped = "no_progress";
+        break;
+      }
+      if (attempted >= maxStories) stopped = "cap";
+    }
+  } finally {
+    busy = false;
+  }
+
+  const remaining = countStoriesToSummarize(
+    config.storySummary.minScore,
+    config.storySummary.maxAttempts,
+  );
+  console.log(`[backfill] done: ${summarized} summarized in ${batches} batches, ${remaining} remaining`);
+  return { batches, attempted, summarized, remaining, stopped };
 }

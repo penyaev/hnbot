@@ -10,10 +10,10 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { config, telegramEnabled } from "./config.js";
-import { storyCount, summaryCount } from "./db.js";
+import { storyCount, summaryCount, countStoriesToSummarize } from "./db.js";
 import { requireAuth } from "./auth.js";
 import { poll } from "./ingest.js";
-import { summarizePending } from "./storySummary.js";
+import { summarizePending, backfillSummaries } from "./storySummary.js";
 import { getTopStories, resolveFeed } from "./topStories.js";
 import { getSummary } from "./summary.js";
 import { ask } from "./ask.js";
@@ -91,6 +91,17 @@ api.get("/ask", async (c) => {
     console.error("ask failed:", e);
     return c.json({ error: (e as Error).message }, 500);
   }
+});
+
+api.post("/backfill", (c) => {
+  const backlog = countStoriesToSummarize(
+    config.storySummary.minScore,
+    config.storySummary.maxAttempts,
+  );
+  // Drains in the background — the backlog can take minutes at 20/batch.
+  // Watch progress via /health (summaryCount) or the logs.
+  void backfillSummaries().catch((e) => console.error("backfill failed:", e));
+  return c.json({ ok: true, started: true, backlog, note: "draining in background; watch /health summaryCount" });
 });
 
 api.post("/ingest", async (c) => {

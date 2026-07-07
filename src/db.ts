@@ -150,6 +150,17 @@ export function listStoriesToSummarize(minScore: number, maxAttempts: number, li
     .all(minScore, maxAttempts, limit) as StoryRow[];
 }
 
+/** How many notable stories are still awaiting a summary (backlog size). */
+export function countStoriesToSummarize(minScore: number, maxAttempts: number): number {
+  return (
+    db
+      .prepare(
+        "SELECT COUNT(*) AS c FROM stories WHERE score >= ? AND summary IS NULL AND summary_attempts < ?",
+      )
+      .get(minScore, maxAttempts) as { c: number }
+  ).c;
+}
+
 export function saveStorySummary(id: number, summary: string, model: string): void {
   db.prepare(
     `UPDATE stories
