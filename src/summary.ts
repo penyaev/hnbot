@@ -1,7 +1,8 @@
 /**
- * LLM summary of HN trends over the past M days, via Claude Sonnet 4.6.
- * Operates on story titles + light metadata (score, comments, domain) — cheap,
- * and enough signal for a "what's been happening" overview.
+ * LLM digest of HN trends over the past M days, via Claude Sonnet 4.6.
+ * "Summarizes the summaries": it synthesizes from the per-story paragraphs built
+ * during ingestion (src/storySummary.ts), falling back to the title for any top
+ * story not yet summarized. Cheap, because the article-reading happened once.
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config.js";
@@ -16,20 +17,20 @@ function anthropic(): Anthropic {
   return client;
 }
 
-const SYSTEM_PROMPT = `You are a concise tech-news analyst. You are given the top Hacker News stories from the past few days, each with its score (points), comment count, and a source link. Produce a brief, skimmable digest in Markdown with these sections:
+const SYSTEM_PROMPT = `You are a concise tech-news analyst. You are given the top Hacker News stories from the past few days. Most include a short summary of the article and its discussion; some have only a title. Each has a score (points), comment count, and a source link. Produce a brief, skimmable digest in Markdown with these sections:
 
 ## TL;DR
 2-4 sentences on the single biggest things that happened.
 
 ## Themes & trends
-Group the stories into a handful of themes (e.g. AI, security, dev tools, business, science). For each theme, one short paragraph or a few bullets describing what's going on. Fold related stories together rather than listing them one by one.
+Group the stories into a handful of themes (e.g. AI, security, dev tools, business, science). For each theme, one short paragraph or a few bullets describing what's going on, drawing on the per-story summaries for substance. Fold related stories together rather than listing them one by one.
 
 ## Notable stories
-5-8 bullets for the standout individual stories, each: the headline as a short phrase, why it matters in a clause, and the score/comment signal in parentheses.
+5-8 bullets for the standout individual stories, each: the headline as a short phrase, why it matters in a clause (grounded in its summary), and the score/comment signal in parentheses.
 
 SOURCE LINKS (important): whenever you reference a specific story — in ANY section, including the TL;DR and themes — append a Markdown link to its source immediately after the mention, like "... a supply-chain nightmare ([link](https://example.com/...))". Use ONLY the exact URL given for that story in the list below; never invent, guess, or modify a URL, and never link to a story that isn't in the list. Every bullet in "Notable stories" must include its link.
 
-Be factual and grounded in the titles provided — do not invent details not implied by a title. Keep the whole thing tight; a busy reader should get the picture in under a minute.`;
+Be factual and grounded in the summaries provided — do not invent details. Keep the whole thing tight; a busy reader should get the picture in under a minute.`;
 
 function domainOf(url: string | null): string {
   if (!url) return "news.ycombinator.com";
@@ -49,6 +50,8 @@ export interface SummaryStory {
   /** Source link the model cites: the article URL, falling back to the HN discussion. */
   link: string;
   hnUrl: string;
+  /** The stored per-story summary, if one has been generated yet. */
+  summary: string | null;
 }
 
 export interface SummaryResult {
@@ -97,6 +100,7 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
       domain: domainOf(r.url),
       link: r.url ?? hnUrl,
       hnUrl,
+      summary: r.summary,
     };
   });
 
@@ -111,11 +115,11 @@ export async function getSummary(opts: SummaryOptions = {}): Promise<SummaryResu
   }
 
   const list = basedOn
-    .map(
-      (s, i) =>
-        `${i + 1}. ${s.title} — ${s.score} pts, ${s.descendants ?? 0} comments — ${s.domain} — ${s.link}`,
-    )
-    .join("\n");
+    .map((s, i) => {
+      const head = `${i + 1}. ${s.title} — ${s.score} pts, ${s.descendants ?? 0} comments — ${s.domain} — ${s.link}`;
+      return s.summary ? `${head}\n   Summary: ${s.summary}` : head;
+    })
+    .join("\n\n");
 
   const userPrompt = `Top Hacker News stories from the past ${days} day(s):\n\n${list}`;
 

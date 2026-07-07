@@ -10,9 +10,11 @@ export interface HnItem {
   type?: string; // "story" | "comment" | "job" | "poll" | ...
   title?: string;
   url?: string;
+  text?: string; // HTML body for self/Ask/Show posts and comments
   by?: string;
   score?: number;
   descendants?: number;
+  kids?: number[]; // child comment ids, in HN's ranked order
   time?: number; // unix seconds
   dead?: boolean;
   deleted?: boolean;

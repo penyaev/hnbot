@@ -6,11 +6,12 @@
 import cron from "node-cron";
 import { config, telegramEnabled } from "./config.js";
 import { cleanup, poll } from "./ingest.js";
+import { summarizePending } from "./storySummary.js";
 import { sendDailyToAll, sendTrendsToAll } from "./telegram.js";
 
 let polling = false;
 
-/** Run a poll, guarding against overlap if a previous run is still in flight. */
+/** Run a poll followed by a bounded per-story summarization pass. Guards against overlap. */
 export async function runPoll(): Promise<void> {
   if (polling) {
     console.warn("[scheduler] poll already running, skipping this tick");
@@ -19,6 +20,7 @@ export async function runPoll(): Promise<void> {
   polling = true;
   try {
     await poll();
+    await summarizePending();
   } catch (e) {
     console.error("[scheduler] poll failed:", e);
   } finally {

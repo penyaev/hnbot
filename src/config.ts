@@ -54,6 +54,26 @@ export const config = {
   /** Concurrency limit when fetching individual HN items. */
   fetchConcurrency: int("FETCH_CONCURRENCY", 15),
 
+  /** Per-story article summarization (builds the history corpus + feeds the digest). */
+  storySummary: {
+    /** Model for the single-paragraph per-article summaries. */
+    model: str("STORY_SUMMARY_MODEL", "claude-sonnet-5"),
+    /** Only summarize stories whose peak score reaches this. */
+    minScore: int("SUMMARY_MIN_SCORE", 150),
+    /** Max stories summarized per poll (bounds cost/latency per cycle). */
+    maxPerPoll: int("STORY_SUMMARY_MAX_PER_POLL", 20),
+    /** Concurrent summarizations (each does article + comment fetches + one LLM call). */
+    concurrency: int("STORY_SUMMARY_CONCURRENCY", 4),
+    /** Give up on a story after this many failed summarization attempts. */
+    maxAttempts: int("STORY_SUMMARY_MAX_ATTEMPTS", 3),
+    /** Max characters of extracted article text fed to the model. */
+    articleMaxChars: int("ARTICLE_MAX_CHARS", 8000),
+    /** How many top HN comments to include. */
+    comments: int("COMMENTS_PER_STORY", 6),
+    /** Timeout for fetching an article page. */
+    fetchTimeoutMs: int("ARTICLE_FETCH_TIMEOUT_MS", 12000),
+  },
+
   telegram: {
     /** BotFather token. When empty, all Telegram features are disabled. */
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",

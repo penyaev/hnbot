@@ -19,11 +19,18 @@ designed to deploy to Railway for ~$5/mo and forget about it.
 - **Ingestion** (`src/ingest.ts`): polls `beststories` + `topstories`, fetches each item
   with bounded concurrency, and upserts into SQLite keeping the **peak** score seen
   (HN scores climb for ~24h then plateau).
+- **Per-story summaries** (`src/storySummary.ts` + `src/article.ts`): after each poll, any
+  story at/above `SUMMARY_MIN_SCORE` that lacks a summary gets one — we fetch the article
+  text and the top HN comments and ask `STORY_SUMMARY_MODEL` for a single-paragraph
+  summary, stored on the story. This builds a durable **history corpus** (kept forever,
+  even after the story leaves the window) that feeds the digest and a future search feature.
 - **Top stories** (`src/topStories.ts`): selects window stories not yet delivered to the
-  feed, ranked by score, records them as delivered, and returns an opaque `nextCursor`.
-  Dedup state is server-side, keyed by a feed name; the cursor is a handle to that feed.
-- **Summary** (`src/summary.ts`): feeds the top stories' titles + score/comment signal to
-  `claude-sonnet-4-6` and returns a Markdown digest (cached per calendar day).
+  feed, ranked by score, records them as delivered. Dedup state is server-side, keyed by
+  a feed name.
+- **Digest** (`src/summary.ts`): "summarizes the summaries" — feeds the stored per-story
+  paragraphs for the top window stories to `SUMMARY_MODEL` (Sonnet 4.6) and returns a
+  Markdown digest with inline source links (cached per calendar day). Expensive
+  article-reading happens once per story, not per digest.
 
 ## API
 
@@ -38,8 +45,9 @@ All endpoints except `/health` require `Authorization: Bearer $API_TOKEN`.
 
 ### `GET /health`
 
-Liveness probe (used by Railway). No params. Returns `{ ok, storyCount, windowDays }`
-where `storyCount` is the number of stories currently in the window.
+Liveness probe (used by Railway). No params. Returns `{ ok, storyCount, summaryCount,
+windowDays }`. `storyCount` is all rows in the store (recent window + retained summarized
+history); `summaryCount` is how many have a per-story summary.
 
 ### `GET /top`
 
@@ -80,9 +88,10 @@ use `fresh=1` to refresh mid-day.
 
 ### `POST /ingest`
 
-Triggers an HN poll immediately (the scheduler also does this every `POLL_CRON`). No params.
-Returns `{ ok, fetched, upserted, storyCount }`. Useful right after a fresh deploy to
-populate the window without waiting for the next scheduled poll.
+Triggers an HN poll immediately, followed by a bounded per-story summarization pass (the
+scheduler also does both every `POLL_CRON`). No params. Returns `{ ok, fetched, upserted,
+summarized: { attempted, summarized }, storyCount, summaryCount }`. Useful right after a
+fresh deploy to populate the window and start building summaries without waiting.
 
 ## Local development
 
@@ -154,6 +163,8 @@ public domain.
 ## Configuration
 
 See `.env.example`. Core knobs: `WINDOW_DAYS`, `SUMMARY_DAYS`, `SUMMARY_LIMIT`,
-`SUMMARY_MODEL`, `POLL_CRON`, `CLEANUP_CRON`, `FETCH_CONCURRENCY`. Telegram:
+`SUMMARY_MODEL`, `POLL_CRON`, `CLEANUP_CRON`, `FETCH_CONCURRENCY`. Per-story summaries:
+`STORY_SUMMARY_MODEL`, `SUMMARY_MIN_SCORE`, `STORY_SUMMARY_MAX_PER_POLL`,
+`STORY_SUMMARY_CONCURRENCY`, `ARTICLE_MAX_CHARS`, `COMMENTS_PER_STORY`. Telegram:
 `TELEGRAM_BOT_TOKEN`, `PUBLIC_URL`, `TELEGRAM_ALLOWED_USER_IDS`, `TELEGRAM_STORIES`,
 `TELEGRAM_TZ`, `TELEGRAM_DAILY_CRON`, `TELEGRAM_SUMMARY_CRON`.

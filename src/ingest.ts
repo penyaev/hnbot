@@ -93,12 +93,12 @@ export async function poll(): Promise<IngestResult> {
 /**
  * Prune aged-out rows and reclaim disk.
  *
- * Row count is bounded by the sliding window: stories drop out once their
- * submission time leaves the window, and delivery records once they pass it
- * (an aged-out story can never re-enter — `time` only moves further into the
- * past). On top of that, deletes alone don't shrink the SQLite file or bound
- * the WAL, so we checkpoint+truncate the WAL and VACUUM to give pages back to
- * the filesystem. The dataset is tiny (a few hundred rows), so VACUUM is cheap.
+ * Retention: summarized stories are KEPT forever — they're the history corpus
+ * that feeds the digest and (later) search. Only un-summarized stories are
+ * pruned once they leave the window, along with aged-out delivery records (an
+ * aged-out story can never re-enter — `time` only moves further into the past).
+ * Deletes alone don't shrink the SQLite file or bound the WAL, so we
+ * checkpoint+truncate the WAL and VACUUM to give pages back to the filesystem.
  */
 export function cleanup(): {
   storiesDeleted: number;
@@ -106,7 +106,9 @@ export function cleanup(): {
   pageCount: number;
 } {
   const cutoff = Math.floor(Date.now() / 1000) - config.windowDays * 86400;
-  const s = db.prepare("DELETE FROM stories WHERE time < ?").run(cutoff);
+  const s = db
+    .prepare("DELETE FROM stories WHERE time < ? AND summary IS NULL")
+    .run(cutoff);
   const d = db.prepare("DELETE FROM deliveries WHERE delivered_at < ?").run(cutoff);
 
   // Flush + truncate the WAL so it doesn't accumulate, then reclaim free pages.

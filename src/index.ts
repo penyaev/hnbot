@@ -10,9 +10,10 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { config, telegramEnabled } from "./config.js";
-import { storyCount } from "./db.js";
+import { storyCount, summaryCount } from "./db.js";
 import { requireAuth } from "./auth.js";
 import { poll } from "./ingest.js";
+import { summarizePending } from "./storySummary.js";
 import { getTopStories, resolveFeed } from "./topStories.js";
 import { getSummary } from "./summary.js";
 import { startScheduler } from "./scheduler.js";
@@ -21,7 +22,12 @@ import { handleUpdate, registerWebhook, webhookSecret } from "./telegram.js";
 const app = new Hono();
 
 app.get("/health", (c) =>
-  c.json({ ok: true, storyCount: storyCount(), windowDays: config.windowDays }),
+  c.json({
+    ok: true,
+    storyCount: storyCount(),
+    summaryCount: summaryCount(),
+    windowDays: config.windowDays,
+  }),
 );
 
 // Telegram webhook — registered before the authenticated router so the latter's
@@ -77,7 +83,14 @@ api.get("/summary", async (c) => {
 api.post("/ingest", async (c) => {
   try {
     const result = await poll();
-    return c.json({ ok: true, ...result, storyCount: storyCount() });
+    const summarized = await summarizePending();
+    return c.json({
+      ok: true,
+      ...result,
+      summarized,
+      storyCount: storyCount(),
+      summaryCount: summaryCount(),
+    });
   } catch (e) {
     console.error("manual ingest failed:", e);
     return c.json({ error: (e as Error).message }, 500);
